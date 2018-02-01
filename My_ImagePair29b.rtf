@@ -1,0 +1,1378 @@
+{\rtf1\ansi\ansicpg1252\cocoartf1561\cocoasubrtf200
+{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww23600\viewh15060\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 \
+	/** My_ImagePair29b.java						Michael Konrad							run 20-Oct-2017\
+	* from ImagePair29a; add array to save BC vels at each image; added method to CLASS BCellPairs\
+	* from ImagePair25 which uses a CORRECT Class bCells to find bCells from the difference image\
+	* uses Class GenericDialog to set parameters.\
+	* This version of IP29 can plot either BCs (frame) or BCpairs (two frames) or BCpaths (many frames);\
+	* 1st output is 1st input frame; subsequent frames have BC icons on (F_IMAGE0 * 1st frame) background\
+	* However, all BCs are defined as one part of a BC pair. Date-time at top of output.\
+	* 19 May: collect and print statistis on tadpoles per frame (iImage); add a cutoff value for the BCs/frame\
+	* 29 May: filtered return from CLASS bCells (>MIN_HITS & <MAX_HITS) copied to SELECT arrays\
+	* 16 Aug: can use MASK; MASK = 0, 1st image discarded; MASK = 1, 1st image converted to boolean array\
+	* 29 Aug: added min distance between plotted tadpoles, MIN_TAD_SEP, because if they are close can't see tails\
+	* @author Michael Konrad\
+	* @version 21-Oct-2017\
+	*/\
+	import ij.process.*;\
+	//import ij.*;\
+	import java.io.*;\
+	import java.text.DateFormat;\
+	import java.text.SimpleDateFormat;\
+	import java.util.Date;\
+	import ij.gui.*;\
+	//import java.awt.*;\
+	import ij.plugin.filter.*;\
+	import ij.ImagePlus;\
+	// __________________________________________________________________________ CREATE my ImagePlus instance\
+	public class My_ImagePair29b implements PlugInFilter \{\
+		ImagePlus imp;\
+		@Override\
+		public int setup(String arg, ImagePlus imp) \{\
+			this.imp = imp;\
+			return DOES_ALL+DOES_STACKS+SUPPORTS_MASKING;\
+		\}\
+	// Variables used in all images must be declared here, outside the run(ImageProcessor) loop\
+	// image variables\
+		public static int iImage = 0;						// image frame index\
+		public static int w, h;								// dimensions of frame\
+		public int image0 [][] = new int [1920][1080];		// old (previous) frame; can hold both Stnd & HD images\
+		public int image1 [][] = new int [1920][1080];		// new (current) frame\
+		public int hitImage0 [][] = new int [1920][1080];	// hitImage of old cells\
+		public int hitImage1 [][] = new int [1920][1080];	// hitImage of new cells\
+		public int saveImage [][] = new int [1920][1080];	// used to refresh cumImage if cum Image not desired\
+		public int cumImage [][] = new int [1920][1080];	// cumulative image of hits\
+		public boolean maskImage [][] = new boolean [1920][1080];	// make maskImage even if not used\
+		private int colorGrey = 127;						// 0 displays as white, 255 black with inverted LUT\
+		private float fZero = (float) 0.0;\
+		\
+		private int glHist[] = new int [256];				// histogram of grey levels\
+	// used in dialog box;\
+		public int HIT_LEVEL = 10;							// defines white (0) & black cells (1)\
+		private double F_IMAGE0 = 0.0;						// (F_IMAGE0*frame 0) used as background in subsequent frames\
+		private int PRINT_FRAME = -1;						// default = no printing; enter + frame number to get printout\
+		String[] markString = new String[] \{"dot3","dot5","dot7","dot11","tadpole","path"\};\
+		String[] cumString = new String[] \{"single","cumulative"\};\
+		String[] maskChoice = new String[] \{"no Mask","Mask"\};\
+	// returned from CLASS bCells\
+		private int jSelect;\
+		private int nbCells0, nsbCells0;					// number total bCells, selected bCells\
+		private int nbCellHits0 [] = new int [10000];\
+		private int nsbCellHits0[] = new int [10000];		\
+		private float bCellCenters0 [][] = new float [10000][2];\
+		private float sbCellCenters0 [][] = new float [10000][2];\
+		\
+		public int bCellMasses0[] = new int [400];\
+		\
+		private int nbCells1, nsbCells1;\
+		private int nbCellHits1 [] = new int [10000];\
+		private int nsbCellHits1[] = new int [10000];\
+		private float bCellCenters1 [][] = new float [10000][2];\
+		private float sbCellCenters1[][] = new float [10000][2];\
+		\
+		private int histSize = 200;							// size of histogram\
+		private int bCellHitsHist[] = new int [200];		// histogram of bC size (hits/bCell)\
+		private int bCellHitsHistT;		// cumulative histogram of bC size\
+		\
+	// returned or computed from CLASS bCellPairs; "Tadpoles" here is x,ys of old & new BC\
+		public float myPairs [][] = new float [1000][4];	// description of each pair: [pair number][x0, y0, x1, y1]\
+		public int nTadpoles, totalTadpoles;				// number tadpoles for a frame, all frames\
+		private int giTadpoles = 0;							// global Tadpole indes (all frames)\
+		private int frameTadpoles[] = new int [3000];		// list of no of tadpoles in each frame\
+		private int histTadpolesSize = 100;					// size of the histogram array\
+		private int histTadpoles[] = new int [100];			// histogram of above\
+		private int cHistTadpoles[] = new int [100];		// cummulative histogram\
+		private double pcHistTadpoles;\
+		private float xyTadpoles [][] = new float [10000][4];\
+		//private float sTadpoles [] = new float [6000];\
+		private float difTadpoles[][] = new float [10000][2];// differential xyTadpoles[][], implied start at 0,0; for KG\
+		public int ibCell, jbCell, nbCells;					// bCell index, 1st index for a bChord, number bCells in frame\
+		public double STadpoles, totalSTadpoles, avgSTadpoles;		// total distance traveled in each frame, total for this run\
+		\
+	// to avoid overlapping Tadpoles; a Dadpole is the head of a Tadpole that is displayed\
+		private float xyDadpoles[][] = new float [4000][2];	// x,y of heads (1st x,y) of displayed Tadpoles\
+		private int nDadpoles = 0;							// number of Dadpoles\
+		//private float closeTadpoles = (float) 5.0;			// closest new Dadpole can be in X & Y\
+		private float sDx, sDy;\
+		private boolean clear;\
+		\
+	// S double, but for histograms round to nearest integer; SHist arrays same size as Tadpoles / frame histograms\
+		private int SHistImg[] = new int [100];						// BC Separation histogram (distribution) for one frame\
+		private int SHistFile[] = new int [100];					// ... histogram for all frames\
+		private int SHistCum[] = new int [100];						// cumulative histograms\
+		private double DSHistCum[] = new double [100];\
+		private int histPrint = 32;\
+		\
+	// data for all tadpoles in all frames; ADDED IN IP29b\
+		private int allTadpolesJ;\
+		private int allTadpolesF [] = new int [4000];		// frame numbers for tadpoles\
+		private float allTadpolesS[] = new float [4000];	// S values\
+		private double MIN_TAD_SEP = 5.0;					// new tadpoles closer to old not added \
+\
+	// analyze bCell data\
+		public int nChords, sumHits;\
+		public int xHits, xSumHits, xSumCell;\
+		public int x1bChord, x2bChord;\
+		public int ybChord, ySumCell;\
+		public int xbCell, ybCell;\
+		private int MASK;									// if 1, first frame is a mask\
+		private int BC_MARK;								// mark in image for a BCell = dot, tadpole\
+		private int CUMULATIVE_IMAGE;						// 0 individual frames saved; 1 sequential images added\
+		private int MIN_HITS = 3;\
+		private int MAX_HITS = 81;\
+		private double S_PAIR_MIN = 2.0;						// min, max px between BCs which define a pair\
+		private double S_PAIR_MAX = 50.0;\
+		private int MAX_BCS_FRAME = 10;\
+		\
+	// BCellPaths variables\
+		public BCellPaths myPaths = new BCellPaths();		// my paths must be created outside the ip LOOP\
+		public int maxPathNo = 1000;						// maximum number of paths\
+		public int maxPathLn = 64;							// maximum length of each path\
+		// (debug) frame for each XY; should be defined by pathF[] and pahtL[]\
+		public double maxXY2;\
+		public int nImage,bcMpath, pBed;\
+		public int numPaths[] = new int[1000];\
+		public float bcXpath, bcYpath;\
+		public int maxRow;\
+		public int maxFrameGap = 1;\
+		public int minPathLen = 4;\
+		public int numDrawn;								// number of paths drawn for this call\
+		\
+	// ============================================================	ip called repeatedly to process each image in stack\
+		@Override\
+		public void run(ImageProcessor ip) \{\
+			w = ip.getWidth();\
+			h = ip.getHeight();\
+		\
+	// iImage = 0 --------------------------------   get PARAMETERS, make mock or real mask\
+			if (iImage == 0) \{							// iImage is zero based; get PARAMETERS for run\
+				GenericDialog gd = new GenericDialog("Options for Image Pair 29b");\
+				gd.addChoice("mask?", maskChoice, maskChoice[MASK]);\
+				gd.addNumericField("hit threshold", HIT_LEVEL, 0);\
+				gd.addNumericField("minPixels", MIN_HITS, 0);\
+				gd.addNumericField("maxPixels",  MAX_HITS,  0);\
+				gd.addNumericField("Vmin (px/frame)", S_PAIR_MIN, 1);				\
+				gd.addNumericField("Vmax (px/frame)", S_PAIR_MAX, 1);\
+				gd.addNumericField("Max BCs/frame", MAX_BCS_FRAME,0);\
+				gd.addChoice("cell marker",markString, markString[BC_MARK]);\
+				gd.addNumericField("Min Tadpole Separation", MIN_TAD_SEP,1);\
+				gd.addChoice("single or cumulative image", cumString, cumString[CUMULATIVE_IMAGE]);\
+				gd.addNumericField("Background image",F_IMAGE0,2);\
+				gd.addNumericField("print at Image", PRINT_FRAME, 0);\
+				gd.showDialog();\
+				if (gd.wasCanceled()) return;\
+				MASK = gd.getNextChoiceIndex();\
+				HIT_LEVEL = (int) gd.getNextNumber();\
+				MIN_HITS = (int) gd.getNextNumber();\
+				MAX_HITS = (int) gd.getNextNumber();\
+				S_PAIR_MIN = gd.getNextNumber();\
+				S_PAIR_MAX = gd.getNextNumber();\
+				MAX_BCS_FRAME = (int) gd.getNextNumber();\
+				BC_MARK = gd.getNextChoiceIndex();\
+				MIN_TAD_SEP = gd.getNextNumber();\
+				CUMULATIVE_IMAGE = gd.getNextChoiceIndex();\
+				F_IMAGE0 = gd.getNextNumber();\
+				PRINT_FRAME = (int) gd.getNextNumber();\
+				maxXY2 = S_PAIR_MAX * S_PAIR_MAX;		// used in Paths, but should be depreciated\
+				\
+				// MAKE MASK IMAGE	a "real" or "all frame" maskImage is always used\
+				if (MASK == 0) \{						// make an "all frame mask"\
+					for (int y = 0; y < h; y++) \{\
+						for (int x = 0; x < w; x++) \{\
+							maskImage[x][y] = true;\
+						\}\
+					\}\
+				\}\
+				else \{									// make real mask from black region in frame 0\
+					for (int y = 0; y < h; y++) \{\
+						for (int x = 0; x < w; x++) \{\
+							if (ip.getPixel(x, y) < colorGrey) \{maskImage[x][y] = true;\}	// roi = black = 0\
+							else \{maskImage[x][y] = false;\}\
+						\}\
+					\}\
+				\}\
+			\}\
+	// iImage = 1 (the 2nd image) --------------------------------------	create old image = image0\
+			if (iImage == 1) \{\
+				for (int y = 0; y < h; y++) \{							// move down y (horizontal) scan lines\
+					for (int x = 0; x < w; x++) \{						// move across each y line\
+						image0[x][y] = ip.getPixel(x, y);				// generate old image = image0\
+						cumImage[x][y] = (int) (F_IMAGE0 * (double) image0[x][y]);	// dimmed Image0 as background\
+						saveImage[x][y] = cumImage [x][y];				// to refresh cumImage each loop if not cumulative\
+					\}\
+				\}\
+			\}\
+	// iImage > 1 -----------------------------   get new image = image1, make 2 hitImages, save new image as old\
+			if (iImage >1) \{\
+				for (int y = 0; y < h; y++) \{\
+					for (int x = 0; x < w; x++) \{\
+						image1 [x][y] = ip.getPixel(x,y);\
+						// in hitImage1 new BCs dark, hitImage0 old BCs dark;\
+						// with separate hitImages, CLASS BCells works for old (white) and new (dark) BCS\
+						if (maskImage[x][y]) \{							// maskImage only acts on hitImages\
+							hitImage0 [x][y] = image0 [x][y] - image1 [x][y] - HIT_LEVEL;		// old cells\
+							hitImage1 [x][y] = image1 [x][y] - image0 [x][y] - HIT_LEVEL;		// new cells\
+						\}\
+						else \{\
+							//hitImage0 [x][y] = -HIT_LEVEL;			// old cells\
+							//hitImage1 [x][y] = -HIT_LEVEL;			// new cells\
+							\
+							hitImage0 [x][y] = 0;		// old cells\
+							hitImage1 [x][y] = 0;		// new cells\
+						\}\
+						\
+						image0[x][y] = image1[x][y];					// save new image as old for next loop \
+					\}\
+				\}\
+\
+	// if iImage >1 continue on to find BCells etc.\
+			// -----------------------------------------------------------------------------------	create bCells from hitImages\
+				BCells BCells0 = new BCells(hitImage0, w, h);		// old bCells\
+				nbCells0 = BCells0.nbCells;\
+				nbCellHits0 = BCells0.bCellHits();\
+				bCellCenters0 = BCells0.mbCellCenters(HIT_LEVEL);\
+				BCells BCells1 = new BCells(hitImage1, w, h);		// new bCells\
+				nbCells1 = BCells1.nbCells;\
+				nbCellHits1 = BCells1.bCellHits();\
+				bCellCenters1 = BCells1.mbCellCenters(HIT_LEVEL);\
+			// ---------------------------------------------------------------------	copy data for SELECT bCells to new arrays\
+				nsbCells0 = 0;\
+				jSelect = 0;\
+				for (int i = 0; i < nbCells0; i++) \{\
+					if ((nbCellHits0[i] >= MIN_HITS) && (nbCellHits0[i] <= MAX_HITS)) \{\
+						nsbCells0 ++;\
+						nsbCellHits0[jSelect] = nbCellHits0[i];\
+						sbCellCenters0[jSelect] = bCellCenters0[i];\
+						jSelect ++;\
+					\}\
+				\}\
+				nsbCells1 = 0;\
+				jSelect = 0;\
+				for (int i = 0; i < nbCells1; i++) \{\
+					if ((nbCellHits1[i] >= MIN_HITS) && (nbCellHits1[i] <= MIN_HITS)) \{\
+						nsbCells1 ++;\
+						nsbCellHits1[jSelect] = nbCellHits1[i];\
+						sbCellCenters1[jSelect] = bCellCenters1[i];\
+						jSelect ++;\
+					\}\
+				\}\
+				for (int i = 0; i < nbCells0; i++) \{				// generate histogram of number of hits/bCell\
+					int nHits = nbCellHits0[i];\
+					if(nHits > histSize) nHits = histSize -2;		// trim nHits to fit in array\
+					bCellHitsHist[nHits]++;\
+				\}\
+			// ---------------------------------------------------	find old-new bCell pairs; for some options only one plotted\
+				BCellPairs myPairs = new BCellPairs(nsbCells0, sbCellCenters0, nbCells1, bCellCenters1, S_PAIR_MIN, S_PAIR_MAX);\
+				\
+				nTadpoles = myPairs.nbCellPairs();					// generate statistics of tadpoles/frame\
+				totalTadpoles += nTadpoles;\
+				frameTadpoles[iImage] = nTadpoles;\
+				\
+				if(nTadpoles > 99) nTadpoles = 99;					// dump values outside capacity into last bin\
+				histTadpoles[nTadpoles]++;\
+				\
+				STadpoles = myPairs.totalS();						// generate statistics for S (pair separation)\
+				totalSTadpoles += STadpoles;\
+				avgSTadpoles = totalSTadpoles / totalTadpoles;\
+				\
+				SHistImg = myPairs.distSPairs();					// get histogram of S for this image\
+				for (int i = 0; i<99; i++) \{\
+					SHistFile[i] += SHistImg[i];					// increment histogram for entire IS File\
+				\}\
+			/* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++	ADDED IN IP29b\
+				sTadpoles = myPairs.bCellPairsS();					// get list of S from myPairs\
+				for (int i = 0; i < nTadpoles; i++) \{				// extend list of S for all frames\
+					allTadpolesJ++;\
+					allTadpolesF[allTadpolesJ] = iImage;\
+					allTadpolesS[allTadpolesJ] = sTadpoles[i];\
+				\}*/\
+				\
+				\
+				xyTadpoles = myPairs.bCellPairs();\
+				if(nTadpoles > MAX_BCS_FRAME) nTadpoles = 0;		// exclude frames with more than MAX_BCS_FRAME tadpoles\
+				for (int i = 0; i < nTadpoles; i++) \{				// make cum list of difTadpoles[][] for KG fan display\
+					giTadpoles ++;\
+					difTadpoles[giTadpoles][0] = xyTadpoles [i][2] - xyTadpoles [i][0];\
+					difTadpoles[giTadpoles][1] = xyTadpoles [i][3] - xyTadpoles [i][1];\
+				\}\
+				\
+				// choose how to mark BCs or tadpoles\
+				if (BC_MARK == 5) \{						// -----------------------------------------	mark paths with dots\
+				\
+					for (int ipath = 0; ipath < nbCells0; ipath++) \{		// make BCellPaths from old bCellCenters\
+						bcXpath = bCellCenters0[ipath][0];\
+						bcYpath = bCellCenters0[ipath][1];\
+						bcMpath = bCellMasses0[ipath];\
+						/*if (useMask) \{									// BC must be inside Mask\
+							if ( bMask[(int)bcXpath][(int)bcYpath]) \{\
+								iPath = myPaths.addBCell (nImage, bcXpath, bcYpath, bcMpath);\
+							\}\
+						\}\
+						else \{ */											// if no Mask, just add bCell to a path\
+						bcMpath = 0;					// temp\
+						numPaths[iImage] = myPaths.addBCell (iImage, maxXY2, bcXpath, bcYpath, bcMpath);\
+					\}\
+					\
+					//myPaths.purgePaths(maxFrameGap,  minPathLen);\
+					myPaths.bedPaths(cumImage, w, h, maxFrameGap, minPathLen);\
+					if (iImage == 30)\{ myPaths.printPaths();\}\
+				\} \
+				\
+				else if (BC_MARK == 4) \{				//	-------------------------------	mark bCellPairs with Tadpole (with spacing)\
+					// a new xyTadpoles[][] created for each frame, xyDadpoles[][] incremented throughout run\
+					for (int i=0; i<nTadpoles; i++) \{	// over possible new Dadpoles; IconPair takes float x,y\
+						if (nDadpoles == 0) \{\
+							// CLASS IconPair draws a Tadpole\
+							IconPair myTadpole = new IconPair(cumImage, w, h, xyTadpoles[i][0],xyTadpoles[i][1],xyTadpoles[i][2],xyTadpoles[i][3]);\
+							cumImage = myTadpole.addIcon();\
+							// Dadpole added to list and total set to 1; i must = 0 here\
+							xyDadpoles[0][0] = xyTadpoles[0][0];\
+							xyDadpoles[0][1] = xyTadpoles[0][1];\
+							nDadpoles = 1;\
+						\}\
+						else \{\
+						clear = true;\
+							for (int j=0; j<nDadpoles; j++) \{	// compare x,y to all existing Dadpoles\
+								sDx = Math.abs(xyTadpoles[i][0] - xyDadpoles[j][0]);\
+								sDy = Math.abs(xyTadpoles[i][1] - xyDadpoles[j][1]);\
+								if ((sDx < MIN_TAD_SEP) && (sDy < MIN_TAD_SEP)) \{clear = false;\}\
+							\}\
+							if (clear) \{\
+								// CLASS IconPair draws a Tadpole\
+								IconPair myTadpole = new IconPair(cumImage, w, h, xyTadpoles[i][0],xyTadpoles[i][1],xyTadpoles[i][2],xyTadpoles[i][3]);\
+								cumImage = myTadpole.addIcon();\
+								// Dadpole added to list and total incremented\
+								\
+								xyDadpoles[nDadpoles][0] = xyTadpoles[i][0];\
+								xyDadpoles[nDadpoles][1] = xyTadpoles[i][1];\
+								nDadpoles++;\
+								if(nDadpoles > 3999) \{nDadpoles = 3999;\}\
+							\}\
+						\}\
+					\}\
+				\}\
+				else if (BC_MARK == 3) \{\
+					for (int i=0; i<nTadpoles; i++) \{			// Icon11s takes int x,y\
+						Icon11s myTadpole = new Icon11s(cumImage,w, h, (int)xyTadpoles[i][0],(int)xyTadpoles[i][1]);\
+						cumImage = myTadpole.addIcon();\
+					\}\
+				\}\
+				\
+				else if (BC_MARK == 2) \{\
+					for (int i=0; i<nTadpoles; i++) \{			// Icon7s takes int x,y\
+						Icon7s myTadpole = new Icon7s(cumImage,w, h, (int)xyTadpoles[i][0],(int)xyTadpoles[i][1]);\
+						cumImage = myTadpole.addIcon();\
+					\}\
+				\}\
+				\
+				else if(BC_MARK == 1) \{					//	-----------------------------------	mark old bCells with 5x5 dot\
+					for (int i=0; i<nTadpoles; i++) \{			// Icon5s takes int x,y\
+						Icon5s myTadpole = new Icon5s(cumImage,w, h, (int)xyTadpoles[i][0],(int)xyTadpoles[i][1]);\
+						cumImage = myTadpole.addIcon();\
+					\}\
+				\}\
+				\
+				else if(BC_MARK == 0) \{					  					for (int i=0; i<nTadpoles; i++) \{			// Icon3s takes int x,y\
+						Icon3s myTadpole = new Icon3s(cumImage,w, h, (int)xyTadpoles[i][0],(int)xyTadpoles[i][1]);\
+						cumImage = myTadpole.addIcon();\
+					\}\
+				\}\
+				\
+				// ------------------------------------------------------------------------- Save images in output Image Sequence\
+				for (int y = 0; y < h; y++) \{\
+					for (int x = 0; x < w; x++) \{\
+						ip.putPixel(x,y,cumImage[x][y]);\
+						if(CUMULATIVE_IMAGE == 0) \{cumImage[x][y] = saveImage [x][y];\}		// if no cum images, renew 1st frame\
+					\}\
+				\}\
+			\}			// --------------------------------------------------------------end of ELSE block where iImage > 0)\
+			\
+		if (iImage == PRINT_FRAME) \{\
+			DateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");\
+			Date date = new Date();\
+			try \{\
+				PrintWriter myWriter = new PrintWriter( new PrintStream("_Param-Results"));	// PrintStream ("  ") is file name\
+				myWriter.println(dateFormat.format(date));\
+				myWriter.printf ("%s\\n\\n", "Input PARAMETERS & Output from My_ImagePair29b.java");\
+				myWriter.printf("%s\\t\\t%6d\\n","HIT_LEVEL",HIT_LEVEL);\
+				myWriter.printf("%s\\t%6d%6d\\n","MIN_HITS MAX_HITS",MIN_HITS, MAX_HITS);\
+				myWriter.printf("%s\\t%6.1f%6.1f\\n", "PAIR_MIN PAIR_MAX",S_PAIR_MIN, S_PAIR_MAX);\
+				myWriter.printf("%s\\t\\t%s\\t%s\\n","BC_MARK  SEQ",markString[BC_MARK],cumString[CUMULATIVE_IMAGE]);\
+				myWriter.printf("%s\\t%6.2f\\n", "If BC_MARK = tadpole, MIN_TAD_SEP:", MIN_TAD_SEP);\
+				myWriter.printf("\\n%s\\n", "    Output data");\
+				myWriter.printf("%s\\n","Frames Tadpoles  avgS  maxBC/frame");\
+				\
+				myWriter.printf("%6d%6d\\t%6.1f\\t%6d\\n\\n", PRINT_FRAME, totalTadpoles, avgSTadpoles, MAX_BCS_FRAME);\
+				myWriter.printf("%s\\n","Histogram of Image0-1 difference greylevels");			// HISTOGRAM OF GREY LEVELS\
+				for (int i = 0; i <histPrint; i++) \{\
+					myWriter.printf("%6d\\t%8d\\n", i, glHist[i]);\
+				\}\
+				\
+				myWriter.printf("\\n%s\\n"," Histogram of number of Tadpoles per Image frame");	// 	HISTOGRAM OF (TADPOLES/FRAME)\
+				myWriter.printf("%s\\n","PerFrame  Noframes   Cumulative  PC Greater");\
+				cHistTadpoles[0] = histTadpoles[0];\
+				for (int i = 1; i < histPrint; i++) \{\
+					cHistTadpoles[i] = cHistTadpoles[i-1] + histTadpoles[i];\
+				\}\
+				for (int i = 0; i<histPrint; i++) \{\
+					pcHistTadpoles = 100.0 - (100.0 * (double) cHistTadpoles[i] / (double) PRINT_FRAME);\
+					myWriter.printf("%6d\\t%8d\\t%8d\\t%8.2f\\n", i, histTadpoles[i], cHistTadpoles[i], pcHistTadpoles);\
+				\}\
+				\
+				myWriter.printf("\\n%s\\n"," Histogram of separation between BC pairs");	// ----	HISTOGRAM OF PAIR SEPARATION (S)\
+				myWriter.printf("%s\\n","Separation  Number   Cumulative   PC Greater");\
+				SHistCum[0] = SHistFile[0];\
+				for (int i =1; i < histTadpolesSize; i++) \{\
+					SHistCum[i] = SHistCum[i-1] + SHistFile[i];\
+				\}\
+				\
+				for (int i = 0; i<histPrint; i++) \{\
+					DSHistCum[i] = 100.0 * (double)(SHistCum[histTadpolesSize-1] - SHistCum[i]) / (double)SHistCum[histTadpolesSize-1];\
+					myWriter.printf("%6d\\t%8d\\t%8d\\t%8.2f\\n", i, SHistFile[i], SHistCum[i], DSHistCum[i]);\
+				\}\
+				\
+				myWriter.printf("%s\\n","Histogram of bCell size (hits/bCell");\
+				for (int i = 0; i < 64; i++) \{\
+					bCellHitsHistT += bCellHitsHist[i];\
+					myWriter.printf("%6d%8d%8d\\n", i, bCellHitsHist[i], bCellHitsHistT);\
+				\}\
+				\
+				myWriter.printf("%s\\n","List of tadpoles, Frame numbers and S values");\
+				for( int i = 0; i < allTadpolesJ; i++) \{\
+					myWriter.printf("%6d\\t%6d\\t%8.1f\\n", i, allTadpolesF[i], allTadpolesS[i]);\
+				\}\
+				\
+				myWriter.printf("%s\\n\\n\\n","difTadpoles for KG fan display");\
+				for (int i = 0; i < totalTadpoles; i++) \{\
+					myWriter.printf("%6d\\t%8.2f\\t%8.2f\\n", i, fZero, fZero);\
+					myWriter.printf("%6d\\t%8.2f\\t%8.2f\\n", i, difTadpoles[i][0], difTadpoles[i][1]);\
+				\}\
+		\
+				myWriter.flush();\
+				myWriter.close();\
+			\}\
+			catch (IOException e) \{\
+				e.printStackTrace();\
+			\}\
+		\}\
+			\
+			iImage++;\
+		\}			// -----------------------------------------------------------------------	end of ImageProcessor loop\
+	\}			// -------------------------------------------------------------------------------------	end of CLASS My_ImagePair	\
+	\
+	// =====================================================================================================================	CLASS BCellPaths\
+	/**\
+	 * Class BCellPaths called from main ImagePair Class.\
+	 * Each path is a set of arrays holding different data for each node of the path; \
+	 * Method addBCell; imports imageNo, X, Y, V, M; if there is an adjacent cell (distance squared < delXY2) XY in the previous frame,\
+	 * 		adds imported data to grow the Path, if not creates new Path.\
+	 * Method purgePaths; searches all Paths; if (imageN - frame of last entry) > pGap and pathL < minLen, set all Path[] to 0 for reuse.\
+	 * Valid paths are saved until the end of the image sequence.\
+	 * @author mwkonrad\
+	 * @version 28-Mar-2017\
+	 */\
+	class BCellPaths \{\
+		private int mImage;\
+		public float bcX, bcY;\
+		private int pathLMHist[][] = new int[16][8];		// histogram [L][M]\
+		private int pathMHist[] = new int[64];\
+		private float tX, tY;							// this X and this Y of the new bc\
+		private double delXY2, tdelXY2;					// (delta X + delta Y)^2 max for match; this (delta X ....)\
+		private int bcMass;								// total bc mass\
+		private int maxGap = 0;							// max frames since addition to path\
+		private int minLen = 2;							// min length of path\
+		//public ArrayDeque<Integer>dpathF = new ArrayDeque<Integer>();		basis of possible new PATH CLASS\
+		private int maxPathNo = 1000;					// maximum number of paths\
+		private int maxPathLn = 64;						// maximum length of each path\
+		public int pathF[] = new int[1000];				// frame of 1st XY in path\
+		private int pathL[] = new int[1000];				// length of path (number of XY pairs)\
+		private float pathX[][] = new float[1000][64];	// list of X values \
+		private float pathY[][] = new float[1000][64];	// list of Y values\
+		private float pathV[][] = new float[1000][64];	// separation of consecutive XY pairs, velocity if multiplied by 30\
+		private int pathM[][] = new int [1000][64];		// Mass = sum of intensities over cell\
+		private int pathCF[][] = new int[1000][64];		// (debug) frame for each XY; should be defined by pathF[] and pahtL[]\
+		\
+		//private int iPath;								// path index\
+		private int nextFrame;							// frame for next XY\
+		private int lastXY;								// index of last XY in a path\
+		private boolean bcAdded;						// if true bc was added to a path\
+		private float lowestXY = (float) 0.1;			// if lower, XY is phony\
+		private int pGap,pLen,pNum;						// number of frames since addition to path, path length, \
+		private int thisL,hL,avgM;						// temp variable = pathL[]\
+		private int scaleM = 32;						// size of M histogram bins in pathLMHist[M][L]\
+		private int scaleL = 4;							// size of L histogram bins in pathLMHist[M][L]\
+		private int maxRow;\
+\
+	BCellPaths () \{	\}									// separation of sequential BCells defines a path	-------------	CLASS constructor\
+	\
+	// path arrays: F[] 1st frame, L[] length, X[][], Y[][], V[][] velocity, [][] mass\
+	int addBCell(int mImage, double delXY2, float bcX, float bcY, int bcMass) \{// called for each BCell	-------------------------------	METHOD addBCell\
+		this.mImage =  mImage;									// copy of the global variable iImage\
+		this.delXY2 = delXY2;\
+		this.bcX = bcX;											// X, Y of new BCell\
+		this.bcY = bcY;\
+		this.bcMass = bcMass;\
+\
+		if (bcX < lowestXY || bcY < lowestXY) \{return -2;\}		// should never be needed\
+		bcAdded = false;\
+		\
+		for (int jPath = 0; jPath < maxPathNo; jPath++) \{	// 1st LOOP: ADD to path is last BC is from last frame and is close\
+			nextFrame = pathF[jPath] + pathL[jPath];		// if nextFrame > 0, path is not empty, don't need to test\
+			if (nextFrame == mImage) \{						// possible path to extend\
+				lastXY = pathL[jPath] - 1;					// paths[] are 0 based, thus last Path array index is length -1\
+				tX = bcX - pathX[jPath][lastXY];\
+				tY = bcY - pathY[jPath][lastXY];\
+				tdelXY2 = tX*tX + tY*tY;\
+				\
+				if(tdelXY2 <= delXY2) \{						// this bc is close to last one, add to path\
+					lastXY++;								// increment lastXY\
+					if(lastXY >= maxPathLn) \{return -1;\}	// no more space in this path array\
+					pathL[jPath] = pathL[jPath] + 1;		// pathF not updated, but increment pathL\
+					pathX[jPath][lastXY] = bcX;\
+					pathY[jPath][lastXY] = bcY;\
+					pathV[jPath][lastXY] = (float) Math.sqrt((double) tdelXY2);\
+					pathM[jPath][lastXY] = bcMass;\
+					pathCF[jPath][lastXY] = mImage;			// to debug\
+					bcAdded = true;\
+					return jPath;\
+				\}\
+			\}\
+		\}\
+		\
+		for (int kPath = 0; kPath < maxPathNo; kPath++) \{	// 2nd LOOP: find 1st empty array & START NEW PATH \
+			if(pathL[kPath] == 0) \{							// path is empty, add BCell\
+				pathF[kPath] = mImage;\
+				pathL[kPath] = 1;\
+				pathX[kPath][0] = bcX;\
+				pathY[kPath][0] = bcY;\
+				pathV[kPath][0] = (float) 0.0;				// first bc doesn't have a velocity relative to previous bc\
+				pathM[kPath][0] = bcMass;\
+				pathCF[kPath][0] = mImage;					// mainly to debug\
+				bcAdded = true;\
+				return kPath;\
+			\}\
+		\}\
+		\
+		return -1;												// can not add BCell to a path, return -1\
+	\}	// ----------------------------------------------------------------	end METHOD addBCell\
+	\
+	int purgePaths(int maxGap, int minLen) \{		// -------------------------------------------------------------	METHOD purgePaths\
+		this.maxGap = maxGap;\
+		this.minLen = minLen;\
+		pNum = 0;\
+		for (int iPath = 0; iPath < maxPathNo; iPath++) \{		// loop through all path arrays\
+			pLen = pathL[iPath];								// we will need pathL[] several times, so unpack it now\
+			\
+			if(pLen > 0) \{										// if path empty, skip\
+				pGap = mImage - (pathF[iPath] + pLen);			// number of images since last addition to path\
+				if(pGap > maxGap && pLen <= minLen) \{			// path no longer growing and is too small;\
+					pathF[iPath] = 0;							// erase; set all elements to 0 to create an empty path\
+					pathL[iPath] = 0;\
+					for(int jp = 0; jp < maxPathLn; jp++) \{		// conservative; zero every element though it may already be zero\
+						pathX[iPath][jp] = (float) 0.0;\
+						pathY[iPath][jp] = (float) 0.0;\
+						pathV[iPath][jp] = (float) 0.0;\
+						pathM[iPath][jp] = 0;\
+						pathCF[iPath][jp] = 0;\
+					\}\
+					pNum++;										// number paths purged in this method call\
+					pathLMHist[0][0]++;							// number of purged paths for entire image seq\
+			\}\
+		\}\
+		\}\
+		 return pNum;			// number of paths purged\
+	\}	// --------------------------------------------------------------	end METHOD purgePaths\
+	\
+	int bedPaths(int[][] cumImage, int h, int w, int maxGap, int minLen) \{			// ----------------------------	METHOD bedPaths\
+		this.maxGap = maxGap;						// if not growing and short zero out path, if path long plot\
+		this.minLen = minLen;\
+		pNum = 0;\
+		for (int iPath = 0; iPath < maxPathNo; iPath++) \{		// loop through all path arrays\
+			pLen = pathL[iPath];								// we will need pathL[] several times, so unpack it now\
+			\
+			if(pLen > 0) \{										// if path empty, skip\
+				pGap = mImage - (pathF[iPath] + pLen);			// number of images since last addition to path\
+				if(pGap > maxGap) \{								// path no longer growing\
+					if(pLen < minLen) \{							// PATH TOO SHORT\
+						pathF[iPath] = 0;						// erase; set all elements to 0 to create an empty path\
+						pathL[iPath] = 0;\
+						for(int jp = 0; jp < maxPathLn; jp++) \{	// zero every element though it may already be zero\
+							pathX[iPath][jp] = (float) 0.0;\
+							pathY[iPath][jp] = (float) 0.0;\
+							pathV[iPath][jp] = (float) 0.0;\
+							pathM[iPath][jp] = 0;\
+							pathCF[iPath][jp] = 0;\
+						\}\
+					\}\
+					else \{										// a LONG PATH, draw\
+						final int jp3;\
+						jp3 = pLen - 1;\
+						for(int jp = 0; jp < jp3; jp++) \{\
+							Icon3s mySpot = new Icon3s(cumImage, w, h, (int)pathX[iPath][jp], (int)pathY[iPath][jp]);\
+							cumImage = mySpot.addIcon();\
+						\}\
+						Icon5c myEnd = new Icon5c(cumImage, w, h, (int)pathX[iPath][jp3], (int)pathY[iPath][jp3]);\
+						cumImage = myEnd.addIcon();\
+					\}\
+					pNum++;										// number paths purged in this method call\
+					pathLMHist[0][0]++;							// number of purged paths for entire image seq\
+			\}\
+		\}\
+		\}\
+		 return pNum;			// number of paths purged\
+	\}	// --------------------------------------------------------------	end METHOD purgePaths\
+	\
+	void histPaths() \{								// ---------------------------------------------------------------	METHOD histPaths\
+		for (int ip = 0; ip <maxPathLn; ip++) \{		// over all paths\
+			thisL = pathL[ip];						// L for this path; just one L, but many M for a path\
+			if(thisL >0) \{							// only for non-empty paths\
+				hL = thisL / scaleL;				// Length index for Histogram\
+				if(hL > 7) \{hL = 7;\}				// but should never be > 7\
+					avgM = 0;\
+			\
+					for (int iFrame = 0; iFrame < thisL; iFrame++) \{	// find avg M of this path ...\
+						avgM += pathM[ip][iFrame];						// 1st, make cummulative sum of M\
+					\}\
+			\
+			avgM = avgM / (scaleM * thisL);			// 2nd, convert to avgM index\
+			if(avgM > 7) \{avgM = 7;\}\
+			pathLMHist[hL][avgM]++;\
+			\}\
+		\}\
+	\}	// --------------------------------------------------------------	end METHODS histPaths\
+			void printPaths() \{								// --------------------------------------------------------	METHOD printPaths\
+					try \{\
+						PrintWriter myWriter = new PrintWriter( new PrintStream("_Paths"));		// name of file\
+						myWriter.printf("IP29a-01Apr-2017\\n");									// file header\
+ 						myWriter.printf("Path    1st Frame   Length\\n");\
+						myWriter.printf("    point  Frame   X     Y     V   tmass\\n");\
+						\
+						for (int ipPath = 0; ipPath < 401; ipPath++) \{\
+							myWriter.printf("\\n%4d\\t%4d\\t%4d\\n", ipPath, pathF[ipPath], pathL[ipPath]);		// summary path data\
+							\
+							maxRow = pathL[ipPath];\
+							for (int iXY = 0; iXY < maxRow; iXY++) \{										// XY data for path\
+								myWriter.printf ("   %4d\\t   %4d\\t%6.1f\\t%6.1f\\t%6.2f\\t%6d\\n", iXY,pathCF[ipPath][iXY],pathX[ipPath][iXY],\
+										pathY[ipPath][iXY],pathV[ipPath][iXY],pathM[ipPath][iXY]);\
+							\}\
+						\}\
+						/*histPaths();\
+						for (int iL = 0; iL < 16; iL++) \{\
+							for (int iM = 0; iM <8; iM++) \{\
+								myWriter.printf("%6d\\t", pathLMHist[iL][iM]);\
+							\}\
+							myWriter.printf("\\n\\n");\
+						\}*/\
+						myWriter.flush();\
+						myWriter.close();\
+					\}\
+					catch (IOException e) \{\
+						e.printStackTrace();\
+					\}\
+			return;\
+			\}\
+				// ------------------------------------------------------------------------------	end METHOD printPaths\
+	\
+			\
+			\
+			\
+			\}	// -------------------------------------------------------------------------------------------------	end CLASS BCellPaths\
+\
+// =====================================================================================================================	CLASS BCells\
+/** CLASS BCells	input array of hits: finds runs of hits on rows, finds overlapping runs on columns to create bCells		run 10-Mar-17\
+ * @author mwkonrad\
+ * @version	10-Mar-17\
+ */\
+		class BCells \{\
+		public int hitImage[][];\
+		public int w1, h1;\
+		public int hitLevel;\
+// bChord\
+		private int bChords[][] = new int [2000][1000];	// hit runs found on line y initially stored as: [y][ n * (0, x1, x2)];\
+														// when seen overlapping upper bChord, 0 replaced with ibCell;\
+														// when added to bCell, ibCell set to y\
+		private int nbChords, ibChords;					// number, index for bChords (x pairs) in this line\
+		private int nAbChords, iAbChords;				// number, index for AbChords in line Above\
+		private boolean newbChord = true;				// true if first hit of a bChord\
+		private boolean inbChord = false;				// when exiting a bChord need to reset newChord\
+		private int xc1, xc2, xca1, xca2;				// x pair in bChord at y, x pair in bChord above (at y-1)\
+		private int ixc1, ixc2, ixca1, ixca2;			// indexes in bChord for above \
+// bCell primitives\
+		private int bCell [][] = new int [24000][2000];	// [ibCell][n,(y,x1,x2)... n triplets that define the bCell]\
+		private int ibCell, jbCell;						// bCell index, 1st index for a bChord, number bCells in frame\
+		public int nbCells;\
+		private int iAbCell;							// bCell index picked up from an Above Chord triple\
+		private int nCChords;							// number Chords in a bCell\
+// analyze bCell data\
+		private int nChords;\
+		public int xHits, hSumCell, xSumCell,ySumCell;\
+		private int x1bChord, x2bChord;\
+		public int ybChord;\
+		private float xbCell, ybCell;\
+		public int bCellHits [] = new int [20000];		// number of hits in bCell[i]\
+		public float fbCellCenters[][] = new float [10000][2];\
+		public float mbCellCenters[][] = new float [10000][2];\
+		public int iCall = 0;\
+//	------------------------------------------------------------	most of the work done here	------------  Class CONSTRUCTOR\
+		BCells (int hitImage [][], int w1, int h1) \{\
+			this.hitImage = hitImage;\
+			this.w1 = w1;\
+			this.h1 = h1;\
+	// 1st SECTION											 in: hitImage[x][y]		out: bChords[y][(hit runs at this y)]\
+		// bChord[y][0] total number of hit runs for this y; remainder of bChord[y][] filled with triples describing run\
+		// bChord[y][1] reserved for next task (collecting overlapping hit runs into cells)\
+		// bChord[y][2] 1st x value for this hit run\
+		// bChord[y][3] last x value for this hit run; remaining bChord filled with these triples\
+			for (int y = 0; y < h1; y++) \{					// loop through horizontal scan lines\
+				nbChords = 0;								// reset chord number for this y line\
+				ibChords = 1;								// index for 1st X (number of chords saved in 0)\
+				newbChord = true;\
+				for (int x = 0; x < w1; x++) \{				// move along constant y (horizontal) line\
+					if (hitImage[x][y] >0) \{				// by definition a hit, threshold applied previously\
+						if (newbChord) \{					// 1st hit in this bChord\
+							newbChord = false;\
+							inbChord = true;				// have to remember inside a bChord\
+							nbChords++;\
+							bChords[y][0] = nbChords;	// number of bChords stored in 1st position\
+							bChords[y][ibChords] = 0;	// later this position will contain the bCell index\
+							ibChords++;					// inc index for each entry (3 numbers for each hit run)\
+							bChords[y][ibChords] = x;	// first x \
+							ibChords++;\
+							bChords[y][ibChords] = x;	// enter 2nd x value (for new bChord x2 = x1)\
+						\}\
+						else \{							// in middle of a string of hits\
+							bChords[y][ibChords] = x;	// only update 2nd x value; don't increment ibChords\
+						\}\
+					\}\
+					else \{								// NO HIT; need to finish bChord  if we were in one\
+						if (inbChord) \{					// was in a bChord at previous x\
+							inbChord = false;			// reset\
+							newbChord = true;			// next hit will start a newbChord\
+							ibChords++;					// index for next entry in bChord\
+						\}\
+					\}									// if(pDif\
+				\}										// hitImage[x][]\
+			\}											// hitImage[][y]\
+	// 2nd SECTION												in: bChords[y][]		out: bCells[][]\
+		// bCell[ibCell][0]		ibCell is Cell index; [][0]  number of bChords in this bCell\
+		// bCell[ibCell][>0]	triples that describe the chords: y, x1, x2\
+			ibCell = 0;													// reset for this image\
+			nbCells = 0;\
+			for (int y = 0; y < h1; y++) \{\
+				nbChords = bChords[y][0];								// number of bChords at this y\
+				if (nbChords > 0) \{										// need to process this line\
+					if ((nAbChords == 0) || (y == 0))	\{				// no AbChords: each bChord -> new bCell\
+						for (ibChords = 0; ibChords < nbChords; ibChords++) \{		// over bChords\
+							ixc1 = 2 + (3 * ibChords);					// x pair for bChord\
+							xc1 = bChords[y][ixc1];\
+							ixc2 = ixc1 + 1;\
+							xc2 = bChords [y][ixc2];\
+									\
+							bCell[ibCell][0] = 1;						// number bChords = 1 for new bCells\
+							bCell[ibCell][1] = y;						// y -> bCell \
+							bCell[ibCell][2] = xc1;						// xc1 -> bCell\
+							bCell[ibCell][3] = xc2;						// xc2 -> bCell\
+							bChords[y][1 + (3 * ibChords)] = ibCell;	// 0, xc1, xc2, ->  ibCell, xc1, xc2, \
+							ibCell++;									// inc bCell index\
+						\}\
+					\}\
+					else \{												// there are AbChords, search for overlaps\
+						for (ibChords = 0; ibChords < nbChords; ibChords++) \{				// over bChords\
+							if( bChords [y][1 + (3*ibChords)] != 0) break;\
+							ixc1 = 2 + (3 * ibChords);					// x pair for bChord\
+							xc1 = bChords[y][ixc1];\
+							ixc2 = ixc1 + 1;\
+							xc2 = bChords [y][ixc2];\
+							for (iAbChords = 0; iAbChords < nAbChords; iAbChords++) \{		// over AbChords\
+								ixca1 = 2 + (3 * iAbChords);				// x pair for AbChord\
+								xca1 = bChords[y-1][ixca1];\
+								ixca2 = ixca1 + 1;\
+								xca2 = bChords [y-1][ixca2];\
+				// 16 Nov 2015: This section defines a bCell as a series of overlapping bChords on sequentially increasing y lines\
+								if (xc1 <= xca2 & xc2 >= xca1) \{				// AbChord & bChord OVERLAP\
+											// all AbChords are already in a bCell, if this bChord is not, add it to bCell\
+									if( bChords [y][1 + (3*ibChords)] != 0) break;\
+									iAbCell = bChords [y-1][1 + (3*iAbChords)];	// get bCell index from AbChord \
+									nCChords = bCell[iAbCell][0];				// n(umber)C(ell)Chords in bCell\
+									jbCell = 1 + 3 * (nCChords);				// index for next entry in bCell\
+									bCell[iAbCell][jbCell] = y;					// put bChord into iAbCell\
+									bCell[iAbCell][jbCell + 1] = xc1;\
+									bCell[iAbCell][jbCell + 2] = xc2;\
+									bCell[iAbCell][0]++;						// update bCell chord count\
+											// don't increment ibCell because no new bCell has been created\
+									bChords[y][1 + (3 * ibChords)] = iAbCell;	// add ibCell to bChord triple\
+								\}\
+								if( bChords [y][1 + (3*ibChords)] == 0) \{\
+											// did not find match				put bChord into new bCell because NO OVERLAP\
+									bCell[ibCell][0] = 1;\
+									bCell[ibCell][1] = y;\
+									bCell[ibCell][2] = xc1;\
+									bCell[ibCell][3] = xc2 ;\
+											\
+									bChords[y][1 + (3 * ibChords)] = ibCell;	// add ibCell to this bChord\
+									ibCell++;\
+								\}\
+							\} // loop over AbChords\
+						\} // loop over bChords\
+					\} // nabChords = 0, >0\
+				\} // nbChords > 0\
+				nAbChords = nbChords; 											// potential value for next y line\
+			\} // loop over y\
+			nbCells = ibCell;				// ibCell was incremented after last bCell, so it is the number of bCells\
+		// loop through chords in each bCell to get total hits, avg x, avg y\
+		// y is the 1st value in each triple of a chord; y's sequentially increasing for a convex bCell, but here get it from the chord itself\
+		// following looks like a waste of time, but want a framework for float version where each x,y is weighed by image intensity \
+			for( int jbCell = 0; jbCell < nbCells; jbCell++) \{					// loop over all bCells\
+				nChords = bCell[jbCell][0];							// for each bCell\
+				hSumCell = 0;										// total hits in this bCell (total, not just around the edge)\
+				xSumCell = 0;										// cumulative sum of x values\
+				ySumCell = 0;										// cumulative sum of y values\
+				for( int jy = 0; jy < nChords; jy++) \{							// loop over y (chords) of one bCell\
+					ybChord = bCell[jbCell][1 + 3 * jy];\
+					x1bChord = bCell[jbCell][2 + 3 * jy];						// 1st x in chord		\
+					x2bChord = bCell[jbCell][3 + 3 * jy];						// 2nd x\
+					\
+					for (int jx = x1bChord; jx <= x2bChord; jx++) \{				// index is x value; loop over x (hits) in this y (chord)\
+						hSumCell++;\
+						xSumCell += jx;\
+						ySumCell += jy + ybChord;\
+					\}\
+				\}\
+				// nbCells found above\
+				bCellHits[jbCell] = hSumCell;\
+				xbCell =  (float) xSumCell /  (float) hSumCell;					// note xbCell, ybCell are floats\
+				fbCellCenters [jbCell][0] = xbCell;\
+				ybCell =  ySumCell /  hSumCell;\
+				fbCellCenters [jbCell][1] = ybCell;\
+			\}\
+		\}	//	-----------------------------------------------------------------------------------		end CLASS CONSTRUCTOR\
+		\
+		int nbCells () \{					// number bCells in frame	------------------------	METHOD nbCells\
+			return nbCells;\
+		\}\
+\
+		int [] bCellHits () \{				// number hits for bCell[i]	------------------------	METHOD bCellHits\
+			return bCellHits;\
+		\}\
+// cellCenters always float; f = flat (internal pts weighted equal); m = mass (weighted by intensity)\
+		float [][] fbCellCenters () \{		// ---------------------------- bCellCenters[i][x, y]  	METHOD fbCellCenters\
+			return fbCellCenters;\
+		\}\
+	\
+		float [][] mbCellCenters (int hitLevel) \{		// ----------------------------------------	METHOD mbCellfCenters\
+			int mCell, mSumCell;									// intensity at one x,y; sum of intensities of bCell\
+			\
+			for( int jbCell = 0; jbCell < nbCells; jbCell++) \{		// loop over all bCells\
+				nChords = bCell[jbCell][0];							// for each bCell\
+				mCell = 0;											// total intensity (mass) in this bCell\
+				mSumCell = 0;\
+				xSumCell = 0;										// cumulativfe sum of x valuesf\
+				ySumCell = 0;										// cumulative sum of y values\
+				for( int jy = 0; jy < nChords; jy++) \{						// loop over y (chords) in this bCell\
+					ybChord = bCell[jbCell][1 + 3 * jy];					// y\
+					x1bChord = bCell[jbCell][2 + 3 * jy];					// 1st x in bChord		\
+					x2bChord = bCell[jbCell][3 + 3 * jy];					// last x in bChord\
+						\
+					for (int jx = x1bChord; jx <= x2bChord; jx++) \{			// index is x; pass through x (hits) in this bChord\
+						mCell = hitImage[jx][ybChord] + hitLevel;			// here we want REAL intensity\
+						mSumCell += mCell;\
+						xSumCell += jx * mCell;\
+						ySumCell += ybChord * mCell;\
+					\}\
+				\}\
+																	// get float weighted means -> fbCellCenters [][]\
+				mbCellCenters [jbCell][0] = (float) xSumCell / (float) mSumCell;\
+				mbCellCenters [jbCell][1] = (float) ySumCell / (float) mSumCell;\
+			\}\
+		return mbCellCenters;	\
+		\}\
+	\} // --------------------------------------------------------------------------------------------------------	end CLASS BCells\
+\
+		/**CLASS Icon3s.java	==========================================================================	Class Icon3s\
+		adds a 3x3 pixel solid icon to the image array\
+		 * @author Michael Konrad\
+		 * @version 7-May-2017 */\
+		class Icon3s \{\
+			private int Image[][];				// see CLASS Icon5s for comments\
+			private int xcen, ycen;\
+			private int xFrame, yFrame;\
+			private int xmin = 3;\
+			private int xmax;\
+			private int ymin = 3;\
+			private int ymax;\
+			private int jCell = 0;\
+			private int black = 255;\
+			private int nS = 1;					// side of icon = nS +1 +nS\
+			private int[] icon	 = \{0,1,0,\
+									1,1,1,\
+									0,1,0\};\
+		//Constructor for class\
+			Icon3s (int Image[][], int xFrame, int yFrame, int xcen, int ycen) \{\
+				this.Image = Image;\
+				this.xFrame = xFrame;\
+				this.yFrame = yFrame;\
+				this.xcen = xcen;\
+				this.ycen = ycen;\
+			\}\
+			int [][] addIcon () \{\
+			xmax = xFrame - 2;\
+			ymax = yFrame - 2;\
+				if(((xcen > xmin) && (xcen < xmax)) && ((ycen > ymin) && (ycen < ymax))) \{\
+					for (int i = -nS; i <= nS; i++) \{\
+						for (int j = -nS; j <= nS; j++) \{\
+							if (icon[jCell] == 1) \{\
+								Image [xcen + i] [ycen + j] = black;\
+							\}\
+							jCell++;\
+						\}\
+					\}\
+				\}\
+			return Image;\
+			\}\
+		\}				// --------------------------------	end of CLASS Icon3s\
+		\
+	/**CLASS Icon5s.java		Michael Konrad	 7 May 2017	========================================================== CLASS Icon5s\
+	adds a 5x5 pixel solid icon to the image array\
+	 * @author Michael Konrad\
+	 * @version 7-May-2017 */\
+	class Icon5s \{\
+		private int Image[][];				// icon written to this array\
+		private int xcen, ycen;				// center of icon\
+		private int xFrame, yFrame;			// maxX and max Y of Image[][], i.e. it's dimensions\
+		private int nS = 2;					// length of the side of icon = nS + 1 + nS\
+		private int xmin = nS + 2;			// closest the icon center can be to x = 0 (a little conservative)\
+		private int xmax;					// closest the icon center can be to x = xFrame (computed below)\
+		private int ymin = nS + 2;\
+		private int ymax;\
+		private int jCell = 0;\
+		private int black = 255;\
+		\
+		private int[] icon	 = \{0,1,1,1,0,\
+								1,1,1,1,1,\
+								1,1,1,1,1,\
+								1,1,1,1,1,\
+								0,1,1,1,0\};\
+	//Constructor for class\
+		Icon5s (int Image[][], int xFrame, int yFrame, int xcen, int ycen) \{\
+			this.Image = Image;\
+			this.xFrame = xFrame;\
+			this.yFrame = yFrame;\
+			this.xcen = xcen;\
+			this.ycen = ycen;\
+			\
+		\}\
+		\
+		int [][] addIcon () \{\
+		xmax = xFrame -nS -2;\
+		ymax = yFrame -nS -2;\
+		\
+			if(((xcen > xmin) && (xcen < xmax)) && ((ycen > ymin) && (ycen < ymax))) \{\
+				for (int i = -nS; i <= nS; i++) \{\
+					for (int j = -nS; j <= nS; j++) \{\
+						if (icon[jCell] == 1) \{\
+							Image [xcen + i] [ycen + j] = black;\
+						\}\
+						jCell++;\
+					\}\
+				\}\
+			\}\
+		return Image;\
+		\}\
+	\}				// end of CLASS icon5s\
+\
+	//CLASS Icon5c.java		Michael Konrad  4 Nov 2015	 ========================================================== CLASS Icon5c\
+	//adds a 5x5 pixel circle icon to image array\
+	class Icon5c \{\
+		public int Image[][];				// see CLASS Icon5s for comments\
+		public int xcen, ycen;\
+		private int xmin = 5;\
+		private int xmax = 636;\
+		private int ymin = 5;\
+		private int ymax = 476;\
+		private int jCell = 0;\
+		private int black = 255;\
+		private int[] icon	 = \{0,1,1,1,0,\
+								1,0,0,0,1,\
+								1,0,0,0,1,\
+								1,0,0,0,1,\
+								0,1,1,1,0\};\
+	//Constructor for class\
+		Icon5c (int Image[][], int w, int h, int xcen, int ycen) \{\
+			this.Image = Image;\
+			this.xcen = xcen;\
+			this.ycen = ycen;\
+		\}\
+		\
+		int [][] addIcon () \
+		\{\
+			if(((xcen > xmin) && (xcen < xmax)) && ((ycen > ymin) && (ycen < ymax))) \{\
+				for (int i = -2; i <= 2; i++) \{\
+					for (int j = -2; j <= 2; j++) \{\
+						if (icon[jCell] == 1) \{\
+							Image [xcen + i] [ycen + j] = black;\
+						\}\
+						jCell++;\
+					\}\
+				\}\
+			\}\
+		return Image;\
+		\}\
+	\}				// end of CLASS Icon5c\
+	\
+	/**CLASS Icon7s.java		Michael Konrad	 6 May 2017	========================================================== CLASS Icon7s\
+		adds a 7x7 pixel solid icon to image array\
+		@author Michael Konrad\
+		@version 7-May-2017 */\
+		class Icon7s \{\
+			private int Image[][];				// see CLASS Icon5s for comments\
+			private int xcen, ycen;\
+			private int xFrame, yFrame;\
+			private int nS = 3;\
+			private int xmin = nS + 2;\
+			private int xmax;\
+			private int ymin = nS + 2;\
+			private int ymax;\
+			private int jCell = 0;\
+			private int black = 255;\
+			private int[] icon	 = \{0,0,1,1,1,0,0,\
+									0,1,1,1,1,1,0,\
+									1,1,1,1,1,1,1,\
+									1,1,1,1,1,1,1,\
+									1,1,1,1,1,1,1,\
+									0,1,1,1,1,1,0,\
+									0,0,1,1,1,0,0\};\
+		//Constructor for class\
+			Icon7s (int Image[][], int xFrame, int yFrame, int xcen, int ycen) \{\
+				this.Image = Image;\
+				this.xFrame = xFrame;\
+				this.yFrame = yFrame;\
+				this.xcen = xcen;\
+				this.ycen = ycen;\
+				\
+			\}\
+			\
+			int [][] addIcon () \{\
+			xmax = xFrame -nS - 2;\
+			ymax = yFrame -nS - 2;\
+			\
+				if(((xcen > xmin) && (xcen < xmax)) && ((ycen > ymin) && (ycen < ymax))) \{\
+					for (int i = -nS; i <= nS; i++) \{\
+						for (int j = -nS; j <= nS; j++) \{\
+							if (icon[jCell] == 1) \{\
+								Image [xcen + i] [ycen + j] = black;\
+							\}\
+							jCell++;\
+						\}\
+					\}\
+				\}\
+			return Image;\
+			\}\
+		\}				// end of CLASS icon7s\
+		\
+		\
+		/**CLASS Icon11s.java		Michael Konrad	 21 Oct 2017	=================================================== CLASS Icon11s\
+		adds a 11 x 11 pixel solid icon to image array\
+		@author Michael Konrad\
+		@version 21-10-2017 */\
+		class Icon11s \{\
+			private int Image[][];				// see CLASS Icon5s for comments\
+			private int xcen, ycen;\
+			private int xFrame, yFrame;\
+			private int nS = 5;			// edge length in this series is odd: nS = 1/2 (edge size -1)\
+			private int xmin = nS + 2;\
+			private int xmax;\
+			private int ymin = nS + 2;\
+			private int ymax;\
+			private int jCell = 0;\
+			private int black = 255;\
+			private int[] icon	= \{0,0,0,0,0,1,0,0,0,0,0,\
+								   0,0,0,1,1,1,1,1,0,0,0,\
+								   0,0,1,1,1,1,1,1,1,0,0,\
+								   0,1,1,1,1,1,1,1,1,1,0,\
+								   0,1,1,1,1,1,1,1,1,1,0,\
+								   1,1,1,1,1,1,1,1,1,1,1,\
+								   0,1,1,1,1,1,1,1,1,1,0,\
+								   0,1,1,1,1,1,1,1,1,1,0,\
+								   0,0,1,1,1,1,1,1,1,0,0,\
+								   0,0,0,1,1,1,1,1,0,0,0,\
+								   0,0,0,0,0,1,0,0,0,0,0\};\
+			//Constructor for class\
+			Icon11s (int Image[][], int xFrame, int yFrame, int xcen, int ycen) \{\
+				this.Image = Image;\
+				this.xFrame = xFrame;\
+				this.yFrame = yFrame;\
+				this.xcen = xcen;\
+				this.ycen = ycen;\
+			\}\
+			int [][] addIcon () \{\
+			xmax = xFrame -nS - 2;\
+			ymax = yFrame -nS - 2;\
+				if(((xcen > xmin) && (xcen < xmax)) && ((ycen > ymin) && (ycen < ymax))) \{\
+					for (int i = -nS; i <= nS; i++) \{\
+						for (int j = -nS; j <= nS; j++) \{\
+							if (icon[jCell] == 1) \{\
+								Image [xcen + i] [ycen + j] = black;\
+							\}\
+							jCell++;\
+						\}\
+					\}\
+				\}\
+			return Image;\
+			\}\
+		\}				// end of CLASS icon11s\
+\
+		\
+\
+	/**	======================================================================================================	CLASS BCellPairs.java\
+	 * Pairs formed from bCellCenters[x][y] in sequential frames; finds pairs of cells in the two frames that are separated by\
+	 * at least dMin (to eliminate animal jiggle) but less than dMax (so it is likely to be the same cell)\
+	 * returns distribution of separations\
+	 * @author mwkonrad\
+	 * @version 21-May-2017\
+	 */\
+		class BCellPairs \{		// input old, new bCellCenters, output pairs (defined by proximity), rejects clusters of >2 cells\
+			public int nb0Cells;\
+			public float b0CellCenters[][];\
+			public int nb1Cells;\
+			public float b1CellCenters[][];\
+			public float bCellPairs[][] = new float [2000][4];	// x,y's for each pair\
+			private float bCellPairsS[] = new float [2000];		// S for each pair; not in bCellPair[][] for backward compatibility\
+			private double dSquare;\
+			public double dMin, dMax;\
+			private double dSquareMin, dSquareMax;\
+			private float c0, c1;				// x, y distances between cells\
+			private int nPair;					// number new paired to one old cell in search; must = 1 for true pair\
+			private int iPair;					// array index for true cell pairs\
+			private int i0, i1;					// index for 0 (old) & 1 (new) cells\
+			private int i0n, i1n;				// corresponding index for neighbors\
+			private float xp0, xp1, yp0, yp1;	// x, y of old and new BC in a pair\
+			private double xd, yd;				// x, y increments\
+			private double SPair, sumSPairs;	// distance between pair, sum of distances between all pairs\
+			private int iSPair, distSPairs[] = new int [100];	// index and histogram of pair separations\
+																				// -------------------------------- class CONSTRUCTOR\
+			BCellPairs (int nb0Cells, float b0CellCenters[][], int nb1Cells, float b1CellCenters[][], double dMin, double dMax) \{\
+			this.nb0Cells = nb0Cells;\
+			this.b0CellCenters = b0CellCenters;\
+			this.nb0Cells = nb1Cells;\
+			this.b1CellCenters = b1CellCenters;\
+			this.dMin = dMin;\
+			this.dMax = dMax;\
+			\
+			dSquareMin = dMin * dMin;			// squares of separations used in test to avoid multiple SQUARE ROOT calls\
+			dSquareMax = dMax * dMax;\
+			\
+			iPair = 0;							// bCellPair index\
+				for (i0 = 0; i0 < nb0Cells; i0++)	\{			// loop through OLD bCells (looping over new cells should get same result)\
+					nPair = 0;									// reset neighbor number\
+					\
+					for (i1 = 0; i1 < nb1Cells; i1++)	\{		// close to any NEW bCells?\
+						c0 = b0CellCenters[i0][0]-b1CellCenters[i1][0];\
+						c1 = b0CellCenters[i0][1]-b1CellCenters[i1][1];\
+						dSquare = (c0 * c0) + (c1 * c1);\
+						if ((dSquare < dSquareMax) && (dSquare > dSquareMin)) \{		// we have real moving BC\
+							nPair++; 							// increment neighbor counter\
+							i0n = i0;							// save both neighbor indexes\
+							i1n = i1;							// if nPair == 1, these will be appropriate\
+						\}										// end of loop through NEW cells\
+					\}											// end of loop through OLD cells\
+					\
+					if (nPair == 1) \{							// one and only one neighbor, put both bCels into bCellPairs array\
+						xp0 = b0CellCenters[i0n][0];			// copy xp0,yp0,xp1,yp1 that into bCellPairs[iPair][0-3]\
+						bCellPairs[iPair][0] = xp0;\
+						yp0 = b0CellCenters[i0n][1];\
+						bCellPairs[iPair][1] = yp0;\
+						xp1 = b1CellCenters[i1n][0];\
+						bCellPairs[iPair][2] = xp1;\
+						yp1 = b1CellCenters[i1n][1];\
+						bCellPairs[iPair][3] = yp1;\
+						\
+						xd = xp0 - xp1;\
+						yd = yp0 - yp0;\
+						SPair= Math.sqrt((xd * xd) + (yd * yd));\
+						bCellPairsS[iPair] = (float) SPair;		// a convenience only, since S can be found from bCellPairs[][]\
+						sumSPairs += SPair;\
+						iSPair = (int) SPair;\
+						if (iSPair >99) iSPair = 99;\
+						distSPairs[iSPair]++;\
+						\
+						iPair++;								// this is the total number of pairs\
+						\
+					\}	// end of saving centers into bCellPairs array\
+				\}	// end of loop through all old bCells\
+			\}	// end of class CONSTRUCTOR\
+			\
+			int nbCellPairs() \{					// -------------------------------------------------------------------	METHOD nbCellPairs\
+				return iPair;					// return number of pairs\
+			\}\
+			\
+			float [][] bCellPairs () \{			// --------------------------------------------------------------------- METHOD bCellPairs\
+				return bCellPairs;				// [pair No][x0, y0, x1, y1]\
+			\}\
+			\
+			float [] bCellPairsS () \{			// --------------------------------------------------------------------	METHOD bCellPairsS\
+				return bCellPairsS;				// return S values of pairs\
+			\}\
+			\
+			double totalS () \{					// --------------------------------------------------------------------- METHOD totalS\
+				return sumSPairs;\
+			\}\
+			\
+			int [] distSPairs () \{\
+				return distSPairs;\
+			\}\
+		\}										// ------------------------------------------------------------------------------	 end of CLASS BCellPairs\
+\
+		//CLASS TestPairs.java		Michael Konrad	6 Dec 2015	====================================================================	CLASS TestPairs\
+				class TestPairs \{										// generates test set of bCellPairs\
+					public float bCellPairs[][] = new float [100][4];\
+					private int nPairs = 16;								// number of cell pairs\
+					TestPairs () \{	// ------------------------------------------------------------------------------ class CONSTRUCTOR\
+						float y1 = 200;\
+						float x10 = 50;\
+						float xStep = 30;\
+						float radius = 16;\
+						double angle;\
+						double aStep = 6.283 / 16.0;\
+						float dx,dy,x0,y0,x1;\
+						\
+						for (int i=0; i<16; i++)	\{\
+							x1 = x10 + (float)i * xStep;\
+							angle = (double)i * aStep;\
+							dx = (float)(radius * Math.sin(angle));\
+							dy = (float)(radius * Math.cos(angle));\
+							x0 = x1 + dx;\
+							y0 = y1 + dy;\
+							bCellPairs[i][0] = x0;\
+							bCellPairs[i][1] = y0;\
+							bCellPairs[i][2] = x1;\
+							bCellPairs[i][3] = y1;\
+						\}\
+					\}\
+					\
+					int nbCellPairs() \{					// -----------------------------------------------------------------------	METHOD nbCellPairs\
+						return nPairs;					// return number of pairs\
+					\}\
+					float [][] bCellPairs () \{			// ------------------------------------------------------------------------- METHOD bCellPairs\
+						return bCellPairs;				// return x,y values of pairs\
+					\}\
+				\}	// end of CLASS TestPairs\
+\
+				\
+				\
+		//CLASS IconPair.java		Michael Konrad	 3 Dec 2015	=============================================================== CLASS IconPair\
+		//adds a 5x5 head at x,y of new bCell, draws line (tail) to x,y of old bCell\
+		class IconPair \{\
+			public int Image[][];\
+			public int h, w;\
+			private float x0, x1, y0, y1;\
+			private int ix0, iy0, ix1, iy1, idx, idy, iadx, iady,  ixt, iyt;\
+			private float slopeX, slopeY;\
+			private int kMargin = 8;				// bCells closer to edge than this are ignored\
+			private int kxmin;\
+			private int kxmax;\
+			private int kymin;\
+			private int kymax;\
+			private int kTail = 1;					// if new & old closer than this, don't draw tail\
+			private int jCell = 0;\
+			private int black = 255;\
+			private int[] icon	 = \{0,1,1,1,0,		// open circle; head of tadpole (new bCell)\
+									1,0,0,0,1,\
+									1,0,0,0,1,\
+									1,0,0,0,1,\
+									0,1,1,1,0\};\
+			/*private int[] iconD	 = \{1,0,0,0,1,		// X at old cell (just for deBug)\
+									0,1,0,1,0,\
+									0,0,0,0,0,\
+									0,1,0,1,0,\
+									1,0,0,0,1\};*/\
+			IconPair (int Image[][], int w, int h, float x0, float y0, float x1, float y1) \{		//---------	constructor for CLASS IconPair\
+				this.Image = Image;\
+				this.w = w;\
+				this.h = h;\
+				this.x0 = x0;\
+				this.y0 = y0;\
+				this.x1 = x1;\
+				this.y1 = y1;\
+				ix0 = (int) x0;\
+				iy0 = (int) y0;\
+				ix1 = (int) x1;\
+				iy1 = (int) y1;\
+				idx = ix1 - ix0;\
+				idy = iy1 - iy0;\
+				kxmin = kMargin;\
+				kxmax = w - kMargin;\
+				kymin = kMargin;\
+				kymax = h - kMargin;\
+				iadx = Math.abs(idx);\
+				iady = Math.abs(idy);\
+			\}\
+			\
+			int [][] addIcon () 															// ---------------------	method for CLASS IconPair\
+			\{\
+				if(((ix1 > kxmin) && (ix1 < kxmax)) && ((iy1 > kymin) && (iy1 < kymax))) \{	// we are not too near edge\
+					jCell = 0;										// put tadpole head at new bCell position\
+					for (int i = -2; i <= 2; i++) \{\
+						for (int j = -2; j <= 2; j++) \{\
+							if (icon[jCell] == 1) \{\
+								Image [ix1 + i] [iy1 + j] = black;\
+							\}	\
+							jCell++;\
+						\}\
+					\}\
+					\
+					/*jCell = 0;\
+					for (int i = -2; i <= 2; i++) \{					// to debug put cross at old bCell position\
+						for (int j = -2; j <= 2; j++) \{	\
+							if (iconD[jCell] == 1) \{\
+								Image [ix0 + i] [iy0 + j] = black;\
+							\}\
+							jCell++;\
+						\}\
+					\}*/\
+\
+					if((iadx >= iady) && (iadx > kTail))	\{			// tail x1,y1 -> x0,y0; abs delta x > delta y; move along x\
+						slopeX = (y1-y0) / (x1-x0);						// previous line prevents  /0\
+						for ( int i = 1; i <= iadx; i++)	\{	\
+							if (idx >0)	\{								// move to left; x decreases\
+								ixt = ix1 - i;\
+								iyt = iy1 - (int) ((float)i * slopeX);	// if y1 above y0, slope > 0, but want to decrease y\
+								Image [ixt][iyt] = black;\
+							\}	\
+							else \{										// move to right; x increases\
+								ixt = ix1 + i;\
+								iyt = iy1 + (int) ((float)i * slopeX);\
+								Image [ixt][iyt] = black;\
+							\}\
+						\}\
+					\}\
+					\
+					if((iady > iadx) && (iady > kTail))	\{			// draw tail; start at x1, y1; idy longest component, move along it\
+						slopeY = (x1-x0) / (y1-y0);					// previous line prevents  /0\
+						for ( int i = 1; i <= iady; i++)	\{\
+							if (idy >0)	\{\
+								iyt = iy1 - i;	\
+								ixt = ix1 - (int) ((float)i * slopeY);\
+								Image [ixt][iyt] = black;\
+							\}\
+							else \{\
+								iyt = iy1 + i;\
+								ixt = ix1 + (int) ((float)i * slopeY);\
+								Image [ixt][iyt] = black;\
+							\}\
+						\}\
+					\}\
+				\}\
+			return Image;\
+			\}		// ------------------------------------------------------------------------------------------------		end of method addIcon\
+		\}		// ----------------------------------------------------------------------------------------------------		end of CLASS IconPair\
+\
+\
+\
+\
+}
